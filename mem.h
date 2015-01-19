@@ -1,8 +1,15 @@
 #pragma once
 #include <inttypes.h>
-#include <vector>
+#include <deque>
+#include <stddef.h>
+#include <string>
+#include <unordered_map>
+#include "clang/AST/Type.h"
+#include "clang/AST/Stmt.h"
+#include "enums.h"
 #include "rbtree.h"
-#include "types.h"
+
+using namespace clang;
 
 class EmuVal;
 class EmuPtr;
@@ -11,45 +18,65 @@ class EmuPtr;
 // NOTE: block ID 0 to 2 (inclusive) are not used
 typedef uint32_t block_id_t;
 
+uint32_t new_fid(void);
+
 #define BLOCK_ID_NULL 1
 #define BLOCK_ID_INVALID 2
 #define BLOCK_ID_START 3
 
+// represents a list of objects of the same type and size
 class mem_tag{
 public:
-	const size_t offset; //relative to containing mem_block
-	const emu_type_t type;
-	mem_item *prev;
-	mem_item *next;
-	const size_t size; //size of stored object
+	size_t offset; //relative to containing mem_block
+	QualType type;
+	rbnode<mem_tag> *prev;
+	rbnode<mem_tag> *next;
+	size_t typesize; //size of stored object
+	size_t count;
 
-	mem_item(size_t, EmuVal*);
+	mem_tag(size_t, size_t, rbnode<mem_tag>*, QualType);
 	size_t sortval(void) const;
 };
 
 class mem_block{
-friend class mem_item;
+friend class mem_tag;
 public:
-	mem_block(mem_type,EmuVal*);
-	int sortval(void) const;
-	//mem_item* by_index(size_t index) const;
+	mem_block(mem_type_t, const EmuVal*);
+	mem_block(mem_type_t, size_t);
+	size_t sortval(void) const;
+	void write(const EmuVal*, size_t);
 
 	const block_id_t id;
-	size_t size; // extra space is uninit
-	void* data;
+	const size_t size; // extra space is uninit
+	mem_type_t memtype;
+	void* const data;
+	rbnode<mem_tag>* firsttag;
 
 private:
 	rbtree<mem_tag> tags;
+	void remove_tag(mem_tag*);
+	void update_tag_write(const EmuVal*, size_t);
+	void deal_with_end(rbnode<mem_tag>*, rbnode<mem_tag>*, size_t);
 };
 
 class mem_ptr{
 public:
-	mem_ptr(mem_block*, size_t);
+	mem_block* block;
+	size_t offset;
 
-	const mem_block* block; // null if null pointer
-	const size_t offset;
+	mem_ptr(mem_block*, size_t);
 };
 
-extern rbtree<mem_block> active_heap;
-extern std::stack<mem_block> the_stack;
-extern std::unordered_map<std::string, mem_block> global_mem;
+class lvalue{
+public:
+	mem_ptr ptr;
+	QualType type;
+
+	lvalue(mem_block*, QualType, size_t);
+};
+
+extern std::unordered_map<block_id_t, mem_block*> active_mem;
+extern std::deque<std::unordered_map<std::string, lvalue> > stack_vars;
+extern std::unordered_map<std::string, lvalue> global_vars;
+extern std::unordered_map<uint32_t, const void*> global_functions;
+extern std::unordered_map<uint32_t, std::string> external_functions;

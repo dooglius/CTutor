@@ -1,0 +1,28 @@
+#pragma once
+#include <inttypes.h>
+
+enum status_t{
+	STATUS_UNDEFINED,
+	STATUS_UNINITIALIZED,
+	STATUS_DEFINED
+};
+
+enum emu_type_id_t {
+	EMU_TYPE_ZERO_ID    = 0x00000000,
+	EMU_TYPE_INVALID_ID = 0x01010101,
+	EMU_TYPE_INT_ID     = 0x02020202,
+	EMU_TYPE_FUNC_ID    = 0x03030303,
+	EMU_TYPE_VOID_ID    = 0x04040404,
+	EMU_TYPE_BOOL_ID    = 0x05050505,
+	EMU_TYPE_ARR_ID     = 0x06060606,
+	EMU_TYPE_PTR_ID     = 0x80808080 // maybe use as a mask for subtype
+};
+
+enum mem_type_t{
+	MEM_TYPE_STATIC,
+	MEM_TYPE_GLOBAL,
+	MEM_TYPE_STACK,
+	MEM_TYPE_HEAP,
+	MEM_TYPE_EXTERN,
+	MEM_TYPE_INVALID
+};

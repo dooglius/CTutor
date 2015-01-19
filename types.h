@@ -1,101 +1,122 @@
 #pragma once
+#include <stddef.h>
 #include <unistd.h>
 #include "llvm/ADT/APInt.h"
+#include "clang/AST/Type.h"
+#include "enums.h"
 #include "mem.h"
+
+using namespace clang;
 
 extern const llvm::APInt EMU_MIN_INT;
 extern const llvm::APInt EMU_MAX_INT;
 
-enum status_t{
-	STATUS_UNDEFINED,
-	STATUS_UNINITIALIZED,
-	STATUS_DEFINED
-};
-
-enum emu_type_t{
-	EMU_TYPE_ZERO=0, // zero is a special case due to calloc and such
-	EMU_TYPE_INVALID,
-	EMU_TYPE_RAW,
-	EMU_TYPE_INT,
-	EMU_TYPE_PTR,
-	EMU_TYPE_FUNC
-};
+extern QualType RawType;
+extern QualType BoolType;
+extern QualType IntType;
+extern QualType RawPtrType;
 
 class EmuVal{
 public:
+	virtual ~EmuVal(void);
+
 	virtual size_t size(void) const = 0;
 	virtual void print_impl(void) const = 0;
-	virtual void dump_repr(void* ptr) const = 0;
-	virtual void set_to_repr(void* ptr)=0;
-	void print(void);
+	virtual void dump_repr(void*) const = 0;
+	virtual void set_to_repr(const void*)=0;
+	void print(void) const;
 	status_t status;
-	int obj_type;
+	QualType obj_type;
 
 protected:
-	EmuVal(status_t s, int t);
+	EmuVal(status_t, QualType);
 };
-
-class LValue{
-public:
-	EmuVal* value;
-	mem_block* block;
-	mem_range* loc;
-}
 
 class EmuInt : public EmuVal{
 public:
-	EmuInt(status_t s);
-	EmuInt(int i);
+	EmuInt(status_t);
+	EmuInt(int32_t);
+	~EmuInt(void);
 
-	size_t size(void);
-	void print_impl(void);
-	void dump_repr(void*);
-	void set_to_repr(void*);
+	size_t size(void) const;
+	void print_impl(void) const;
+	void dump_repr(void*) const;
+	void set_to_repr(const void*);
+
+	int32_t val;
 
 private:
-	int val;
-	emu_type_t repr_type;
+	emu_type_id_t repr_type_id;
 };
 
 class EmuPtr : public EmuVal{
 public:
-	EmuPtr(status_t s);
-	EmuPtr(mem_block* b, size_t o);
+	EmuPtr(status_t);
+	EmuPtr(mem_ptr);
+	~EmuPtr(void);
 
-	size_t size(void);
-	void print_impl(void);
-	void dump_repr(void*);
-	void set_to_repr(void*);
+	size_t size(void) const;
+	void print_impl(void) const;
+	void dump_repr(void*) const;
+	void set_to_repr(const void*);
 
-private:
-	emu_type_t repr_type;
-	mem_ptr pointer;
-	int repr_bid;
+	union{
+		mem_block* block;
+		struct{
+			emu_type_id_t type_id;
+			block_id_t block_id;
+		} repr;
+	} u;
+	size_t offset;
 };
+/*
+class EmuArr : public EmuPtr{
+public:
+	EmuArr(status_t, unsigned int);
+	EmuArr(mem_ptr, unsigned int);
+	~EmuInt(void);
 
+	unsigned int num;
+};
+*/
 class EmuFunc : public EmuVal{
 public:
-	EmuFunc(const char*);
-	size_t size(void);
-	void print_impl(void);
-	void dump_repr(void*);
-	void set_to_repr(void*);
+	EmuFunc(status_t, QualType);
+	EmuFunc(uint32_t, QualType);
+	~EmuFunc(void);
 
-private:
-	const char* name;
+	size_t size(void) const;
+	void print_impl(void) const;
+	void dump_repr(void*) const;
+	void set_to_repr(const void*);
+
+	emu_type_id_t repr_type_id;
+	uint32_t func_id;
 };
-
-class EmuRaw : public EmuVal{
+/*
+class EmuVoid : public EmuVal{
+	EmuVoid(void);
+	size_t size(void) const;
+	void print_impl(void) const;
+	void dump_repr(void*) const;
+	void set_to_repr(const void*);
+};
+*/
+class EmuBool : public EmuVal{
 public:
-	// assumes pointer is caller allocated, will delete in destructor
-	EmuRaw(size_t, void*);
-	~EmuRaw(void);
-	size_t size(void);
-	void print_impl(void);
-	void dump_repr(void*);
-	void set_to_repr(void*);
+	EmuBool(status_t);
+	EmuBool(bool b);
+	~EmuBool(void);
 
-private:
-	size_t len;
-	void* buf;
+	size_t size(void) const;
+	void print_impl(void) const;
+	void dump_repr(void*) const;
+	void set_to_repr(const void*);
+
+	emu_type_id_t repr_type_id;
+	char value;
 };
+
+//extern const EmuType EMU_TYPE_INT;
+//extern const EmuType EMU_TYPE_FUNC;
+//extern const EmuType EMU_TYPE_INVALID;
