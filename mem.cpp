@@ -1,3 +1,4 @@
+#include "llvm/Support/raw_ostream.h"
 #include "exit.h"
 #include "mem.h"
 #include "rbtree.h"
@@ -14,7 +15,7 @@ static block_id_t new_block_id(void){
 	return ans;
 }
 
-static uint32_t fid_counter = 1;
+static uint32_t fid_counter = FUNC_ID_START;
 uint32_t new_fid(void){
 	uint32_t ans = fid_counter;
 	if(ans == 0){ // overflow
@@ -29,6 +30,7 @@ std::deque<std::unordered_map<std::string, lvalue> > stack_vars;
 std::unordered_map<std::string, lvalue> global_vars;
 std::unordered_map<uint32_t, const void*> global_functions;
 std::unordered_map<uint32_t, std::string> external_functions;
+std::unordered_map<uint32_t, std::string> simulated_functions;
 
 
 // only next isn't set immediately
@@ -115,9 +117,31 @@ void mem_block::update_tag_write(const EmuVal* obj, size_t offset){
 		firsttag = newtag;
 		return;
 	}
-	// if we are aligned, we can avoid creating a tag for raw data
 	size_t start_typesize = start->value.typesize;
 	size_t start_offset = start->value.offset;
+	size_t start_endpos = start_offset + start->value.count*start_typesize;
+	// check if we are right after the previous tag
+	if(offset == start_endpos){
+		// check for combining with that
+		QualType start_type = start->value.type;
+		if(qtype == start_type){
+			size_t newcount = start->value.count+1;
+			start->value.count = newcount;
+			deal_with_end(start, start->value.next, start_endpos+start_typesize);
+			return;
+		}
+	}
+	// if we start in an uninit range, just stick the new one in
+	if(offset >= start_endpos){
+		size_t typesize = obj->size();
+		newtag = tags.insert(mem_tag(offset, typesize, start, qtype));
+		deal_with_end(newtag, start->value.next, offset+typesize);
+		start->value.next = newtag;
+		return;
+	}
+	// else, this tag cuts off part or all of start
+
+	// if we are aligned, we can avoid creating a tag for raw data from fragmentation
 	size_t start_lastvalid = (offset-start_offset)/start_typesize;
 	size_t start_validbytes = start_lastvalid*start_typesize;
 	size_t alignbytes = offset-(start_offset+start_validbytes);
@@ -125,16 +149,7 @@ void mem_block::update_tag_write(const EmuVal* obj, size_t offset){
 		// check if the tag is already correct
 		QualType start_type = start->value.type;
 		if(qtype == start_type) return;
-		// else see if we can combine with previous tag
-		rbnode<mem_tag>* before = start->value.prev;
-		if(before != nullptr && qtype == before->value.type){
-			int newcount = before->value.count + 1;
-			before->value.count = newcount;
-			deal_with_end(before, start, offset+newcount*before->value.typesize);
-			return;
-		}
 	}
-	size_t start_endpos = start_offset + start->value.count*start_typesize;
 	size_t typesize = obj->size();
 	if(start_offset == offset){
 		// check if we overwrite start entirely
@@ -208,7 +223,6 @@ mem_block::mem_block(mem_type_t t, const EmuVal* obj)
 mem_block::~mem_block(void){
 	delete[] ((char*)data);
 }
-
 
 mem_ptr::mem_ptr(mem_block* b, size_t o)
 	: block(b), offset(o)

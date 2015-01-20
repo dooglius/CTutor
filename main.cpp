@@ -28,7 +28,7 @@ lvalue eval_lexpr(const Expr* e){
 	if(isa<DeclRefExpr>(e)){
 		const DeclRefExpr* expr = (const DeclRefExpr*)e;
 		std::string name = expr->getDecl()->getNameAsString();
-		for(auto stack_it = stack_vars.cbegin(); stack_it != stack_vars.cend(); ++stack_it){
+		for(auto stack_it = stack_vars.crbegin(); stack_it != stack_vars.crend(); ++stack_it){
 			std::unordered_map<std::string, lvalue> map = *stack_it;
 			auto it = map.find(name);
 			if(it != map.end()){
@@ -155,7 +155,7 @@ const EmuVal* eval_rexpr(const Expr* e){
 			const EmuInt* result;
 			if(op == BO_AddAssign) result = value.add((const EmuInt*)right);
 			else                   result = value.subtract((const EmuInt*)right);
-			result->dump_repr(ptr);
+			left.ptr.block->write(result, left.ptr.offset);
 			delete right;
 			return result;
 		}
@@ -285,9 +285,13 @@ const EmuVal* eval_rexpr(const Expr* e){
 		if(it2 != global_functions.end()){
 			retval = exec_stmt(((const FunctionDecl*)it2->second)->getBody());
 		} else {
-			auto it3 = external_functions.find(fid);
-			if(it3 == external_functions.end()){
-				err_exit("Tried to call non-method\n");
+			auto it3 = simulated_functions.find(fid);
+			if(it3 == simulated_functions.end()){
+				auto it4 = external_functions.find(fid);
+				if(it4 == external_functions.end()){
+					err_exit("Tried to call non-method");
+				}
+				err_exit("Call to non-simulated external method");
 			}
 			retval = call_external(it3->second);
 		}
@@ -415,7 +419,8 @@ void StoreFuncImpl(const FunctionDecl *obj){
 
 void InitializeVar(const ValueDecl *obj) {
 	if(isa<FunctionDecl>(obj)){
-		auto it = global_vars.find(obj->getNameAsString());
+		std::string name = obj->getNameAsString();
+		auto it = global_vars.find(name);
 		if(it != global_vars.end()){
 			// could mean it is declared again, or was defined
 			EmuFunc f(it->second.ptr.block->data, obj->getType());
@@ -433,7 +438,11 @@ void InitializeVar(const ValueDecl *obj) {
 		EmuFunc f(fid, obj->getType());
 		mem_block *storage = new mem_block(MEM_TYPE_EXTERN, &f);
 		global_vars.insert(std::pair<std::string, lvalue> (obj->getNameAsString(), lvalue(storage, obj->getType(), 0)));
-		external_functions.insert(std::pair<uint32_t, std::string> (fid, obj->getNameAsString()));
+		if(impl_list.find(name) != impl_list.end()){
+			simulated_functions.insert(std::pair<uint32_t, std::string> (fid, obj->getNameAsString()));
+		} else {
+			external_functions.insert(std::pair<uint32_t, std::string> (fid, obj->getNameAsString()));
+		}
 	} else if(isa<VarDecl>(obj)){
 		const VarDecl *v = (const VarDecl*)obj;
 		const Expr* init = v->getInit();

@@ -28,6 +28,7 @@ rbnode<T>* rbtree<T>::insert(T obj){
 	rbnode<T>* curr = head;
 	if(curr == nullptr){
 		curr = new rbnode<T> (obj);
+		curr->col = false;
 		head = curr;
 		return curr;
 	}
@@ -53,7 +54,7 @@ rbnode<T>* rbtree<T>::insert(T obj){
 	}
 	bool parentright = (grandparent->child[1] == parent);
 	rbnode<T> *uncle = grandparent->child[parentright?0:1];
-	if(uncle->col){
+	if(uncle != nullptr && uncle->col){
 		curr->col = true;
 		parent->child[right?1:0] = curr;
 		do {
@@ -71,9 +72,14 @@ rbnode<T>* rbtree<T>::insert(T obj){
 			grandparent = parent->parent;
 			parentright = (grandparent->child[1] == parent);
 			uncle = grandparent->child[parentright?0:1];
-		} while(uncle->col);
+		} while(uncle != nullptr && uncle->col);
 	}
 	right = (parent->child[1] == curr);
+	rbnode<T>* greatgrandparent = grandparent->parent;
+	bool grandparentright;
+	if(greatgrandparent != nullptr){
+		grandparentright = (greatgrandparent->child[1] == grandparent);
+	}
 	if(right != parentright){
 		parent->child[right?1:0] = curr->child[right?0:1];
 		grandparent->child[parentright?1:0] = curr->child[right?1:0];
@@ -84,8 +90,14 @@ rbnode<T>* rbtree<T>::insert(T obj){
 		grandparent->child[parentright?1:0] = parent->child[right?0:1];
 		parent->child[right?0:1] = grandparent;
 		parent->col = false;
+		curr = parent;
 	}
 	grandparent->col = true;
+	if(greatgrandparent == nullptr){
+		head = curr;
+	} else {
+		greatgrandparent->child[grandparentright?1:0] = curr;
+	}
 	return retval;
 }
 

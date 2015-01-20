@@ -24,6 +24,8 @@ uint32_t new_fid(void);
 #define BLOCK_ID_INVALID 2
 #define BLOCK_ID_START 3
 
+#define FUNC_ID_START 1
+
 // represents a list of objects of the same type and size
 class mem_tag{
 public:
@@ -82,3 +84,4 @@ extern std::deque<std::unordered_map<std::string, lvalue> > stack_vars;
 extern std::unordered_map<std::string, lvalue> global_vars;
 extern std::unordered_map<uint32_t, const void*> global_functions;
 extern std::unordered_map<uint32_t, std::string> external_functions;
+extern std::unordered_map<uint32_t, std::string> simulated_functions;

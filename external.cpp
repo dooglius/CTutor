@@ -1,14 +1,7 @@
-#include <unordered_map>
 #include "cast.h"
 #include "exit.h"
 #include "external.h"
 #include "mem.h"
-
-typedef const EmuVal* (*external_func_t)(void);
-
-const std::vector<external_func_t> test {
-	emu_malloc, emu_free
-};
 
 const std::unordered_map<std::string, external_func_t> impl_list {
 	{"malloc", emu_malloc},

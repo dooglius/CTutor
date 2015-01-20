@@ -55,6 +55,9 @@ EmuInt::EmuInt(const void* p)
 	repr_type_id=t;
 	val = v;
 	switch(t){
+	case EMU_TYPE_INT_ID | EMU_TYPE_UNINIT_MASK:
+		status = STATUS_UNINITIALIZED;
+		return;
 	case EMU_TYPE_INT_ID:
 		break;
 	case EMU_TYPE_ZERO_ID:
@@ -89,7 +92,7 @@ void EmuInt::dump_repr(void* p) const{
 		*val_ptr = val;
 		break;
 	case STATUS_UNINITIALIZED:
-		*type_ptr = EMU_TYPE_INVALID_ID;
+		*type_ptr = EMU_TYPE_INT_ID | EMU_TYPE_UNINIT_MASK;
 		*val_ptr = EMU_TYPE_INVALID_ID;
 		break;
 	}
@@ -155,6 +158,8 @@ EmuULong::EmuULong(const void* p)
 	repr_type_id=t;
 	val = v;
 	switch(t){
+	case EMU_TYPE_ULONG_ID | EMU_TYPE_UNINIT_MASK:
+		status = STATUS_UNINITIALIZED;
 	case EMU_TYPE_ULONG_ID:
 		break;
 	case EMU_TYPE_ZERO_ID:
@@ -189,7 +194,7 @@ void EmuULong::dump_repr(void* p) const{
 		*val_ptr = val;
 		break;
 	case STATUS_UNINITIALIZED:
-		*type_ptr = EMU_TYPE_INVALID_ID;
+		*type_ptr = EMU_TYPE_ULONG_ID | EMU_TYPE_UNINIT_MASK;
 		*val_ptr = EMU_TYPE_INVALID_ID;
 		break;
 	}
@@ -218,12 +223,12 @@ const EmuULong* EmuULong::multiply(const EmuULong* other) const{
 EmuPtr::EmuPtr(status_t s, QualType t)
 	: EmuVal(s,t),offset(0)
 {
-	u.block = nullptr;
 }
 
 EmuPtr::EmuPtr(mem_ptr ptr, QualType t)
 	: EmuVal(STATUS_DEFINED, t),offset(ptr.offset)
 {
+	u.block = nullptr;
 	u.block = ptr.block;
 }
 
@@ -237,7 +242,12 @@ EmuPtr::EmuPtr(const void* p, QualType qt)
 	emu_type_id_t t = *type_ptr;
 	block_id_t id = *bid_ptr;
 	offset = *offset_ptr;
-	if(t == EMU_TYPE_PTR_ID){
+	switch(t){
+	case EMU_TYPE_PTR_ID | EMU_TYPE_UNINIT_MASK:
+		status = STATUS_UNINITIALIZED;
+		break;
+	case EMU_TYPE_PTR_ID:
+	{
 		auto it = active_mem.find(id);
 		if(it != active_mem.end()){
 			status = STATUS_DEFINED;
@@ -245,8 +255,11 @@ EmuPtr::EmuPtr(const void* p, QualType qt)
 			u.block = block;
 			return;
 		}
+		// else fall-through
 	}
-	status = STATUS_UNDEFINED;
+	default:
+		status = STATUS_UNDEFINED;
+	}
 	u.repr.type_id = t;
 	u.repr.block_id = id;
 }
@@ -284,7 +297,7 @@ void EmuPtr::dump_repr(void* p) const{
 		*offset_ptr = offset;
 		break;
 	case STATUS_UNINITIALIZED:
-		*type_ptr = EMU_TYPE_INVALID_ID;
+		*type_ptr = EMU_TYPE_PTR_ID | EMU_TYPE_UNINIT_MASK;
 		*bid_ptr = BLOCK_ID_INVALID;
 		*offset_ptr = SIZE_MAX;
 	}
@@ -310,7 +323,7 @@ EmuArr::EmuArr(mem_ptr p, unsigned int n)
 }
 */
 EmuFunc::EmuFunc(status_t s, QualType t)
-	:EmuVal(s,t),repr_type_id(EMU_TYPE_FUNC_ID),func_id(0) //0 is invalid func_id
+	:EmuVal(s,t),repr_type_id(EMU_TYPE_FUNC_ID | ((s==STATUS_UNINITIALIZED)?EMU_TYPE_UNINIT_MASK:0)),func_id(0) //0 is invalid func_id
 {
 }
 
@@ -328,8 +341,21 @@ EmuFunc::EmuFunc(const void* p, QualType qt)
 	repr_type_id = t;
 	uint32_t id = *id_ptr;
 	func_id = id;
-	bool def = (t == EMU_TYPE_FUNC_ID && global_functions.find(id) != global_functions.end());
-	status = def?STATUS_DEFINED:STATUS_UNDEFINED;
+	switch(t){
+		case EMU_TYPE_FUNC_ID | EMU_TYPE_UNINIT_MASK:
+			status = STATUS_UNINITIALIZED;
+			break;
+		case EMU_TYPE_FUNC_ID:
+			if(global_functions.find(id) == global_functions.end()
+			   || simulated_functions.find(id) == simulated_functions.end()
+			   || external_functions.find(id) == external_functions.end()){
+				status = STATUS_DEFINED;
+				break;
+			}
+			// else fall-through
+		default:
+		status = STATUS_UNDEFINED;
+	}
 }
 
 EmuFunc::EmuFunc(const void* p)
@@ -344,7 +370,13 @@ size_t EmuFunc::size(void) const{
 }
 
 void EmuFunc::print_impl(void) const{
-	llvm::outs() << "<function machine code>";
+	if(global_functions.find(func_id) != global_functions.end()){
+		llvm::outs() << "<function machine code>";
+	} else if (simulated_functions.find(func_id) != simulated_functions.end()){
+		llvm::outs() << "<simulated external function>";
+	} else {
+		llvm::outs() << "<external function>";
+	}
 }
 
 void EmuFunc::dump_repr(void* p) const {

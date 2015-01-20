@@ -14,7 +14,7 @@ void debug_dump(void){
 			llvm::outs() << "\t Global '" << it->first << "' of type '"<<it->second.type.getAsString()<<"' has allocation #" << it->second.ptr.block->id << "\n";
 		}
 	}
-	for(auto stack_it = stack_vars.crbegin(); stack_it != stack_vars.crend(); ++stack_it){
+	for(auto stack_it = stack_vars.cbegin(); stack_it != stack_vars.cend(); ++stack_it){
 		std::unordered_map<std::string, lvalue> map = *stack_it;
 		auto it = map.cbegin();
 		if(it == map.cend()) continue;
@@ -51,7 +51,7 @@ void debug_dump(void){
 			llvm::outs() << "     " << qt.getAsString() << "\n";
 			size_t count = curr->value.count;
 			for(size_t i = 0; i < count; i++){
-				const EmuVal* temp = from_lvalue(lvalue(block, qt, i*typesize));
+				const EmuVal* temp = from_lvalue(lvalue(block, qt, pos+i*typesize));
 				llvm::outs() << "      ";
 				temp->print();
 				delete temp;
