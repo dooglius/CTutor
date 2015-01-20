@@ -43,13 +43,15 @@ friend class mem_tag;
 public:
 	mem_block(mem_type_t, const EmuVal*);
 	mem_block(mem_type_t, size_t);
+	~mem_block(void);
+
 	size_t sortval(void) const;
 	void write(const EmuVal*, size_t);
 
 	const block_id_t id;
 	const size_t size; // extra space is uninit
 	mem_type_t memtype;
-	void* const data;
+	void* data;
 	rbnode<mem_tag>* firsttag;
 
 private:

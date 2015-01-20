@@ -14,7 +14,10 @@ extern const llvm::APInt EMU_MAX_INT;
 extern QualType RawType;
 extern QualType BoolType;
 extern QualType IntType;
-extern QualType RawPtrType;
+extern QualType ULongType;
+extern QualType VoidType;
+extern QualType VoidPtrType;
+extern QualType SizeType;
 
 class EmuVal{
 public:
@@ -23,7 +26,7 @@ public:
 	virtual size_t size(void) const = 0;
 	virtual void print_impl(void) const = 0;
 	virtual void dump_repr(void*) const = 0;
-	virtual void set_to_repr(const void*)=0;
+	virtual const EmuVal* cast_to(QualType) const = 0;
 	void print(void) const;
 	status_t status;
 	QualType obj_type;
@@ -36,12 +39,15 @@ class EmuInt : public EmuVal{
 public:
 	EmuInt(status_t);
 	EmuInt(int32_t);
+	EmuInt(const void*);
 	~EmuInt(void);
 
 	size_t size(void) const;
 	void print_impl(void) const;
 	void dump_repr(void*) const;
-	void set_to_repr(const void*);
+	const EmuVal* cast_to(QualType) const;
+	const EmuInt* add(const EmuInt*) const;
+	const EmuInt* subtract(const EmuInt*) const;
 
 	int32_t val;
 
@@ -49,16 +55,36 @@ private:
 	emu_type_id_t repr_type_id;
 };
 
+class EmuULong : public EmuVal{
+public:
+	EmuULong(status_t);
+	EmuULong(uint32_t);
+	EmuULong(const void*);
+	~EmuULong(void);
+
+	size_t size(void) const;
+	void print_impl(void) const;
+	void dump_repr(void*) const;
+	const EmuVal* cast_to(QualType) const;
+	const EmuULong* multiply(const EmuULong*) const;
+
+	uint32_t val;
+
+private:
+	emu_type_id_t repr_type_id;
+};
+
 class EmuPtr : public EmuVal{
 public:
-	EmuPtr(status_t);
-	EmuPtr(mem_ptr);
+	EmuPtr(status_t, QualType);
+	EmuPtr(mem_ptr, QualType);
+	EmuPtr(const void*, QualType);
 	~EmuPtr(void);
 
 	size_t size(void) const;
 	void print_impl(void) const;
 	void dump_repr(void*) const;
-	void set_to_repr(const void*);
+	const EmuVal* cast_to(QualType) const;
 
 	union{
 		mem_block* block;
@@ -83,38 +109,42 @@ class EmuFunc : public EmuVal{
 public:
 	EmuFunc(status_t, QualType);
 	EmuFunc(uint32_t, QualType);
+	EmuFunc(const void*, QualType);
+	EmuFunc(const void*);
 	~EmuFunc(void);
 
 	size_t size(void) const;
 	void print_impl(void) const;
 	void dump_repr(void*) const;
-	void set_to_repr(const void*);
+	const EmuVal* cast_to(QualType) const;
 
 	emu_type_id_t repr_type_id;
 	uint32_t func_id;
 };
-/*
+
 class EmuVoid : public EmuVal{
+public:
 	EmuVoid(void);
 	size_t size(void) const;
 	void print_impl(void) const;
 	void dump_repr(void*) const;
-	void set_to_repr(const void*);
+	const EmuVal* cast_to(QualType) const;
 };
-*/
+
 class EmuBool : public EmuVal{
 public:
 	EmuBool(status_t);
 	EmuBool(bool b);
+	EmuBool(const void*);
 	~EmuBool(void);
 
 	size_t size(void) const;
 	void print_impl(void) const;
 	void dump_repr(void*) const;
-	void set_to_repr(const void*);
+	const EmuVal* cast_to(QualType) const;
 
 	emu_type_id_t repr_type_id;
-	char value;
+	unsigned char value;
 };
 
 //extern const EmuType EMU_TYPE_INT;

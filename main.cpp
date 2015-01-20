@@ -1,14 +1,17 @@
 #include <limits.h>
 #include <unistd.h>
+
 #include "clang/AST/ASTConsumer.h"
 #include "clang/AST/Expr.h"
 #include "clang/AST/Stmt.h"
 #include "clang/Frontend/CompilerInstance.h"
 #include "clang/Frontend/FrontendAction.h"
 #include "clang/Tooling/Tooling.h"
+
 #include "cast.h"
 #include "debug.h"
 #include "exit.h"
+#include "external.h"
 #include "help.h"
 #include "main.h"
 #include "mem.h"
@@ -18,6 +21,8 @@ using namespace clang;
 using namespace llvm;
 
 unsigned int currloc=0;
+
+SourceManager* src_mgr;
 
 lvalue eval_lexpr(const Expr* e){
 	if(isa<DeclRefExpr>(e)){
@@ -41,16 +46,21 @@ lvalue eval_lexpr(const Expr* e){
 		const EmuVal* base = eval_rexpr(expr->getBase());
 		const EmuVal* idx = eval_rexpr(expr->getIdx());
 		const Type* basetype = base->obj_type.getCanonicalType().getTypePtr();
-		if(isa<PointerType>(basetype)){
+		if(!basetype->isPointerType()){
+			basetype->dump();
 			cant_handle();
 		}
-		const Type* t = idx->obj_type.getCanonicalType().getTypePtr();
-		if(!isa<BuiltinType>(t) || (((const BuiltinType*)t)->getKind() != BuiltinType::Int)){
+		QualType t = idx->obj_type.getCanonicalType();
+		if(t != IntType){
+			t.dump();
 			cant_handle();
 		}
 		const EmuPtr* emup = (const EmuPtr*)base;
 		mem_ptr p = mem_ptr(emup->u.block, emup->offset);
-		size_t offset = p.offset + ((const EmuInt*)idx)->val;
+		QualType subtype = ((const PointerType*)basetype)->getPointeeType();
+		const EmuVal* temp = from_lvalue(lvalue(nullptr, subtype, 0));
+		size_t offset = p.offset + temp->size()*((const EmuInt*)idx)->val;
+		delete temp;
 		return lvalue(p.block, ((const PointerType*)basetype)->getPointeeType(), offset);
 	}
 	cant_handle();
@@ -58,13 +68,10 @@ lvalue eval_lexpr(const Expr* e){
 
 // caller must free returned value
 const EmuVal* eval_rexpr(const Expr* e){
-	outs() << "DEBUG: eval_rexpr on\n";
-	e->dump();
 	if(isa<IntegerLiteral>(e)){
 		const IntegerLiteral *obj = (const IntegerLiteral*)e;
 		APInt i = obj->getValue();
 		if(i.slt(EMU_MIN_INT) || i.sgt(EMU_MAX_INT)){
-			outs() << "DEBUG: int too big or too small\n";
 			cant_handle();
 		}
 		return new EmuInt(i.getSExtValue());
@@ -74,7 +81,7 @@ const EmuVal* eval_rexpr(const Expr* e){
 		case UO_AddrOf:
 		{
 			lvalue arg = eval_lexpr(obj->getSubExpr());
-			return new EmuPtr(arg.ptr);
+			return new EmuPtr(arg.ptr, arg.type);
 		}
 		case UO_Deref:
 		case UO_Extension:
@@ -103,8 +110,8 @@ const EmuVal* eval_rexpr(const Expr* e){
 		case BO_Assign:
 		{
 			lvalue left = eval_lexpr(ex->getLHS());
-			const EmuVal* ans = cast_to(right, left.type);
-			if(ans != right) delete right;
+			const EmuVal* ans = right->cast_to(left.type);
+			delete right;
 			left.ptr.block->write(ans, left.ptr.offset);
 			return ans;
 		}
@@ -116,12 +123,9 @@ const EmuVal* eval_rexpr(const Expr* e){
 		case BO_NE:
 		{
 			const EmuVal *left = eval_rexpr(ex->getLHS());
-			const Type* tl = left->obj_type.getCanonicalType().getTypePtr();
-			const Type* tr = right->obj_type.getCanonicalType().getTypePtr();
-			if(!isa<BuiltinType>(tl) || (((const BuiltinType*)tl)->getKind() != BuiltinType::Int)){
-				cant_handle();
-			}
-			if(!isa<BuiltinType>(tr) || (((const BuiltinType*)tr)->getKind() != BuiltinType::Int)){
+			QualType tl = left->obj_type.getCanonicalType();
+			QualType tr = right->obj_type.getCanonicalType();
+			if(tl != IntType || tr != IntType){
 				cant_handle();
 			}
 			int32_t lval = ((const EmuInt*)left)->val;
@@ -129,7 +133,7 @@ const EmuVal* eval_rexpr(const Expr* e){
 			delete left;
 			delete right;
 			int32_t ans;
-			if(op == BO_LT)     ans = (lval <  rval)?1:0;
+			if(op == BO_LT)    ans = (lval <  rval)?1:0;
 			else if(op==BO_GT) ans = (lval >  rval)?1:0;
 			else if(op==BO_LE) ans = (lval <= rval)?1:0;
 			else if(op==BO_GE) ans = (lval >= rval)?1:0;
@@ -141,26 +145,35 @@ const EmuVal* eval_rexpr(const Expr* e){
 		case BO_SubAssign:
 		{
 			lvalue left = eval_lexpr(ex->getLHS());
-			const Type* tl = left.type.getCanonicalType().getTypePtr();
-			const Type* tr = right->obj_type.getCanonicalType().getTypePtr();
-			if(!isa<BuiltinType>(tl) || (((const BuiltinType*)tl)->getKind() != BuiltinType::Int)){
+			QualType tl = left.type.getCanonicalType();
+			QualType tr = right->obj_type.getCanonicalType();
+			if(tl != IntType || tr != IntType){
 				cant_handle();
 			}
-			if(!isa<BuiltinType>(tr) || (((const BuiltinType*)tr)->getKind() != BuiltinType::Int)){
-				cant_handle();
-			}
-			EmuInt* value = new EmuInt(STATUS_UNINITIALIZED);
-			void* ptr = ((char*)left.ptr.block)+left.ptr.offset;
-			value->set_to_repr(ptr);
-			if(op == BO_AddAssign) value->val += ((const EmuInt*)right)->val;
-			else                   value->val -= ((const EmuInt*)right)->val;
-			value->dump_repr(ptr);
+			void* ptr = &((char*)left.ptr.block->data)[left.ptr.offset];
+			const EmuInt value(ptr);
+			const EmuInt* result;
+			if(op == BO_AddAssign) result = value.add((const EmuInt*)right);
+			else                   result = value.subtract((const EmuInt*)right);
+			result->dump_repr(ptr);
 			delete right;
-			return value;
+			return result;
+		}
+		case BO_Mul:
+		{
+			const EmuVal* left = eval_rexpr(ex->getLHS());
+			QualType tl = left->obj_type.getCanonicalType();
+			QualType tr = right->obj_type.getCanonicalType();
+			if(tl == ULongType && tr == ULongType){
+				const EmuULong* retval = ((const EmuULong*)left)->multiply((const EmuULong*)right);
+				delete left;
+				delete right;
+				return retval;
+			}
+			cant_handle();
 		}
 		case BO_PtrMemD:
 		case BO_PtrMemI:
-		case BO_Mul:
 		case BO_Div:
 		case BO_Rem:
 		case BO_Add:
@@ -192,6 +205,107 @@ const EmuVal* eval_rexpr(const Expr* e){
 			return from_lvalue(eval_lexpr(sub));
 		case CK_NoOp:
 			return eval_rexpr(sub);
+		case CK_BitCast:
+		{
+			if(!isa<ExplicitCastExpr>(e)){
+				e->dump();
+				cant_cast();
+			}
+			const ExplicitCastExpr* expr = (const ExplicitCastExpr*)e;
+			return eval_rexpr(sub)->cast_to(expr->getTypeAsWritten());
+		}
+		case CK_IntegralCast:
+		{
+			return eval_rexpr(sub)->cast_to(expr->getType());
+		}
+		case CK_VectorSplat:
+		case CK_IntegralToBoolean:
+		case CK_IntegralToFloating:
+		case CK_FloatingToIntegral:
+		case CK_FloatingToBoolean:
+		case CK_FloatingCast:
+		case CK_CPointerToObjCPointerCast:
+		case CK_BlockPointerToObjCPointerCast:
+		case CK_AnyPointerToBlockPointerCast:
+		case CK_ObjCObjectLValueCast:
+		case CK_FloatingRealToComplex:
+		case CK_FloatingComplexToReal:
+		case CK_FloatingComplexToBoolean:
+		case CK_FloatingComplexCast:
+		case CK_FloatingComplexToIntegralComplex:
+		case CK_IntegralRealToComplex:
+		case CK_IntegralComplexToReal:
+		case CK_IntegralComplexToBoolean:
+		case CK_IntegralComplexCast:
+		case CK_IntegralComplexToFloatingComplex:
+		case CK_ARCProduceObject:
+		case CK_ARCConsumeObject:
+		case CK_ARCReclaimReturnedObject:
+		case CK_ARCExtendBlockObject:
+		case CK_AtomicToNonAtomic:
+		case CK_NonAtomicToAtomic:
+		case CK_CopyAndAutoreleaseBlockObject:
+		case CK_BuiltinFnToFnPtr:
+		case CK_ZeroToOCLEvent:
+		case CK_AddressSpaceConversion:
+		case CK_ReinterpretMemberPointer:
+		case CK_UserDefinedConversion:
+		case CK_ConstructorConversion:
+		case CK_IntegralToPointer:
+		case CK_PointerToIntegral:
+		case CK_PointerToBoolean:
+		case CK_ToVoid:
+		default:
+			e->dump();
+			cant_cast();
+		}
+	} else if(isa<CallExpr>(e)){
+		// TODO: what if declared names don't match defined names?
+		const CallExpr* expr = (const CallExpr*)e;
+		const Expr* const* args = expr->getArgs();
+		const FunctionDecl* decl = expr->getDirectCallee();
+		stack_vars.push_front(std::unordered_map<std::string, lvalue>());
+		int i = 0;
+		for(auto it = decl->param_begin(); it != decl->param_end(); it++){
+			const ParmVarDecl* param = *it;
+			const EmuVal* val = eval_rexpr(args[i++]);
+			mem_block* storage = new mem_block(MEM_TYPE_STACK, val);
+			stack_vars.front().insert(std::pair<std::string, lvalue>(std::string("arg ")+std::to_string(i),lvalue(storage, param->getType(), 0)));
+			delete val;
+		}
+		auto it = global_vars.find(decl->getNameAsString());
+		if(it == global_vars.end()){
+			err_exit("Tried to call unknown method\n");
+		}
+		const void* loc = &((char*)it->second.ptr.block->data)[it->second.ptr.offset];
+		const EmuFunc f(loc);
+		uint32_t fid = f.func_id;
+		auto it2 = global_functions.find(fid);
+		const EmuVal* retval;
+		if(it2 != global_functions.end()){
+			retval = exec_stmt(((const FunctionDecl*)it2->second)->getBody());
+		} else {
+			auto it3 = external_functions.find(fid);
+			if(it3 == external_functions.end()){
+				err_exit("Tried to call non-method\n");
+			}
+			retval = call_external(it3->second);
+		}
+		stack_vars.pop_front();
+		return retval;
+	} else if(isa<UnaryExprOrTypeTraitExpr>(e)){
+		const UnaryExprOrTypeTraitExpr* expr = (const UnaryExprOrTypeTraitExpr*)e;
+		switch(expr->getKind()){
+		case UETT_SizeOf:
+		{
+			QualType qt = expr->getArgumentType();
+			const EmuVal* fake = from_lvalue(lvalue(nullptr, qt, 0));
+			uint32_t thesize = (uint32_t)fake->size();
+			delete fake;
+			return new EmuULong(thesize);
+		}
+		case UETT_AlignOf:
+		case UETT_VecStep:
 		default:
 			cant_handle();
 		}
@@ -209,11 +323,11 @@ void exec_decl(const Decl* d){
 	const Expr* init = decl->getInit();
 	const EmuVal* val;
 	if(init == nullptr){
-		val = blank_from_type(decl->getType());
+		val = from_lvalue(lvalue(nullptr,decl->getType(),0));
 	} else {
 		const EmuVal* temp = eval_rexpr(init);
-		val = cast_to(eval_rexpr(init), decl->getType());
-		if(val != temp) delete temp;
+		val = eval_rexpr(init)->cast_to(decl->getType());
+		delete temp;
 	}
 
 	mem_block* storage = new mem_block(MEM_TYPE_STACK, val);
@@ -222,8 +336,8 @@ void exec_decl(const Decl* d){
 
 // null if it just ended with no return call
 // caller must free returned if not null
-const EmuVal* exec_stmt(const SourceManager& src_mgr, const Stmt* s){
-	unsigned int line = src_mgr.getSpellingLineNumber(s->getLocStart());
+const EmuVal* exec_stmt(const Stmt* s){
+	unsigned int line = src_mgr->getSpellingLineNumber(s->getLocStart());
 	if(line != currloc){
 		currloc = line;
 		debug_dump();
@@ -234,7 +348,7 @@ const EmuVal* exec_stmt(const SourceManager& src_mgr, const Stmt* s){
 		const CompoundStmt* stmt = (const CompoundStmt*)s;
 		stack_vars.push_front(std::unordered_map<std::string, lvalue>());
 		for(auto it = stmt->body_begin(); it != stmt->body_end(); it++){
-			retval = exec_stmt(src_mgr, (const Stmt*)*it);
+			retval = exec_stmt((const Stmt*)*it);
 			if(retval != nullptr){
 				break;
 			}
@@ -258,7 +372,7 @@ const EmuVal* exec_stmt(const SourceManager& src_mgr, const Stmt* s){
 		const Expr* cond = stmt->getCond();
 		const Expr* inc = stmt->getInc();
 		const Stmt* body = stmt->getBody();
-		retval = exec_stmt(src_mgr,init);
+		retval = exec_stmt(init);
 		if(retval != nullptr){
 			stack_vars.pop_front();
 			return retval;
@@ -269,7 +383,7 @@ const EmuVal* exec_stmt(const SourceManager& src_mgr, const Stmt* s){
 			delete temp;
 			if(z) break;
 
-			retval = exec_stmt(src_mgr, body);
+			retval = exec_stmt(body);
 			if(retval != nullptr){
 				stack_vars.pop_front();
 				return retval;
@@ -300,14 +414,11 @@ void StoreFuncImpl(const FunctionDecl *obj){
 }
 
 void InitializeVar(const ValueDecl *obj) {
-	outs() << "DEBUG: initializevar called on " << obj->getName() << "\n";
 	if(isa<FunctionDecl>(obj)){
-		outs() << "DEBUG: initializing function " << obj->getName() << "\n";
 		auto it = global_vars.find(obj->getNameAsString());
 		if(it != global_vars.end()){
 			// could mean it is declared again, or was defined
-			EmuFunc f(STATUS_UNDEFINED, obj->getType());
-			f.set_to_repr(it->second.ptr.block->data);
+			EmuFunc f(it->second.ptr.block->data, obj->getType());
 			auto it2 = global_functions.find(f.func_id);
 			if(it2 != global_functions.end()){
 				// if defined, just make it show up now
@@ -333,9 +444,9 @@ void InitializeVar(const ValueDecl *obj) {
 			// make sure it hasn't been declared before, we don't want to overwrite a definition with a declaration
 			if(!newdef) return;
 
-			val = blank_from_type(obj->getType());
+			val = from_lvalue(lvalue(nullptr,obj->getType(),0));
 		} else {
-			val = cast_to(eval_rexpr(init), obj->getType());
+			val = eval_rexpr(init)->cast_to(obj->getType());
 		}
 
 		mem_block* storage;
@@ -357,9 +468,12 @@ public:
 
 virtual void HandleTranslationUnit(ASTContext &context) {
 	IntType = context.IntTy;
+	ULongType = context.UnsignedLongTy;
 	BoolType = context.BoolTy;
 	RawType = context.UnknownAnyTy;
-	RawPtrType = context.getPointerType(RawType);
+	VoidType = context.VoidTy;
+	VoidPtrType = context.getPointerType(VoidType);
+	src_mgr = (SourceManager*)&context.getSourceManager();
 	TranslationUnitDecl* file = context.getTranslationUnitDecl();
 	file->dump();
 	// first, we need to store implementations of the functions, in case a global initializer wants to call one
@@ -371,30 +485,25 @@ virtual void HandleTranslationUnit(ASTContext &context) {
 	}
 
 	// stuff to track line numbers
-	const SourceManager& src_mgr = file->getASTContext().getSourceManager();
-	FileID mainfile = src_mgr.getMainFileID();
+	FileID mainfile = src_mgr->getMainFileID();
 
 	// now, start initializing
 	for(auto it = file->decls_begin(); it != file->decls_end(); it++){
 		const Decl* d = *it;
 		if(isa<ValueDecl>(d)){
 			SourceLocation loc = d->getLocation();
-			FileID from = src_mgr.getFileID(loc);
+			FileID from = src_mgr->getFileID(loc);
 			if(from != mainfile){
-				loc = src_mgr.getIncludeLoc(from);
+				loc = src_mgr->getIncludeLoc(from);
 			}
-			unsigned int line = src_mgr.getSpellingLineNumber(loc);
+			unsigned int line = src_mgr->getSpellingLineNumber(loc);
 			if(line != currloc){
 				currloc = line;
-				llvm::outs() << "Reached line " << line << "\n";
 				debug_dump();
 			}
-			outs() << "Now calling initializevar\n";
 			InitializeVar((const ValueDecl*)d);
 		}
 	}
-
-	llvm::outs() << "DEBUG: now finding main\n";
 
 	// At this point, let's find the main method and call it
 	const FunctionDecl *func;
@@ -403,15 +512,14 @@ virtual void HandleTranslationUnit(ASTContext &context) {
 		if(it == global_vars.end()){
 			err_exit("No main method declared\n");
 		}
-		EmuFunc f(STATUS_UNDEFINED, it->second.type);
-		f.set_to_repr(it->second.ptr.block->data);
+		EmuFunc f(it->second.ptr.block->data, it->second.type);
 		auto it2 = global_functions.find(f.func_id);
 		if(it2 == global_functions.end()){
 			err_exit("No main method defined\n");
 		}
 		func = (const FunctionDecl*)it2->second;
 	}
-	unsigned int line = src_mgr.getSpellingLineNumber(func->getLocation());
+	unsigned int line = src_mgr->getSpellingLineNumber(func->getLocation());
 	if(line != currloc){
 		currloc = line;
 		debug_dump();
@@ -454,16 +562,16 @@ virtual void HandleTranslationUnit(ASTContext &context) {
 	}
 
 	const Stmt* mainbody = func->getBody();
-	const EmuVal* retval = exec_stmt(src_mgr,mainbody);
+	const EmuVal* retval = exec_stmt(mainbody);
 	if(retval != nullptr){
-		line = src_mgr.getSpellingLineNumber(mainbody->getLocEnd());
+		line = src_mgr->getSpellingLineNumber(mainbody->getLocEnd());
 		if(line != currloc){
 			currloc = line;
 			debug_dump();
 		}
 	}
 
-	do_exit((const EmuInt*)cast_to(retval, retqtype));
+	do_exit((const EmuInt*)retval->cast_to(retqtype));
 }
 };
 

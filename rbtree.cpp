@@ -25,23 +25,23 @@ rbtree<T>::rbtree(T obj) {
 
 template <class T>
 rbnode<T>* rbtree<T>::insert(T obj){
-	if(head == nullptr){
-		rbnode<T>* curr = new rbnode<T> (obj);
+	rbnode<T>* curr = head;
+	if(curr == nullptr){
+		curr = new rbnode<T> (obj);
 		head = curr;
 		return curr;
 	}
 
-	rbnode<T> *grandparent = nullptr;
+	rbnode<T> *grandparent;
 	rbnode<T> *parent = nullptr;
 	bool right;
 	rbnode<T> **ptr_to_new = &head;
-	rbnode<T>* curr;
 	do{
-		curr = *ptr_to_new;
 		grandparent = parent;
 		parent = curr;
 		right = curr->value.sortval() < obj.sortval();
 		ptr_to_new = &curr->child[right?1:0];
+		curr = *ptr_to_new;
 	} while(curr != nullptr);
 	curr = new rbnode<T>(obj);
 	*ptr_to_new = curr;

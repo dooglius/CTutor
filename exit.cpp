@@ -29,3 +29,8 @@ void cant_cast(void){
 void exit_clean(void){
 	exit(0);
 }
+
+void err_undef(void){
+	llvm::outs() << "!Tried to use an undefined or uninitialized value\n";
+	exit_premature();
+}

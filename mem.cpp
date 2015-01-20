@@ -205,6 +205,10 @@ mem_block::mem_block(mem_type_t t, const EmuVal* obj)
 	write(obj, 0);
 }
 
+mem_block::~mem_block(void){
+	delete[] ((char*)data);
+}
+
 
 mem_ptr::mem_ptr(mem_block* b, size_t o)
 	: block(b), offset(o)

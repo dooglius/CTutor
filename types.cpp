@@ -8,10 +8,12 @@
 const llvm::APInt EMU_MAX_INT(32, INT_MAX, false);
 const llvm::APInt EMU_MIN_INT(32, (uint64_t)INT_MIN, true);
 
-QualType RawPtrType;
 QualType RawType;
 QualType BoolType;
 QualType IntType;
+QualType ULongType;
+QualType VoidType;
+QualType VoidPtrType;
 
 EmuVal::EmuVal(status_t s, QualType t)
 	:status(s),obj_type(t)
@@ -43,7 +45,30 @@ EmuInt::EmuInt(int32_t i)
 {
 }
 
-EmuInt::~EmuInt(void) {}
+EmuInt::EmuInt(const void* p)
+	: EmuVal(STATUS_UNDEFINED, IntType)
+{
+	const emu_type_id_t* type_ptr = (const emu_type_id_t*)p;
+	const int32_t* val_ptr = (const int32_t*)(type_ptr+1);
+	emu_type_id_t t = *type_ptr;
+	int32_t v = *val_ptr;
+	repr_type_id=t;
+	val = v;
+	switch(t){
+	case EMU_TYPE_INT_ID:
+		break;
+	case EMU_TYPE_ZERO_ID:
+		if(v==0) break;
+	default:
+		status = STATUS_UNDEFINED;
+		return;
+	}
+	status = STATUS_DEFINED;
+}
+
+EmuInt::~EmuInt(void)
+{
+}
 
 size_t EmuInt::size(void) const{
 	// 4 for type tag, 4 for value
@@ -70,15 +95,67 @@ void EmuInt::dump_repr(void* p) const{
 	}
 }
 
-void EmuInt::set_to_repr(const void* p) {
+const EmuInt* EmuInt::add(const EmuInt* other) const{
+	status_t s1 = status;
+	status_t s2 = other->status;
+	if(s1 == STATUS_UNDEFINED || s2 == STATUS_UNDEFINED){
+		return new EmuInt(STATUS_UNDEFINED);
+	}
+	if(s1 == STATUS_UNINITIALIZED || s2 == STATUS_UNINITIALIZED){
+		return new EmuInt(STATUS_UNINITIALIZED);
+	}
+	return new EmuInt(val+other->val);
+}
+
+const EmuInt* EmuInt::subtract(const EmuInt* other) const{
+	status_t s1 = status;
+	status_t s2 = other->status;
+	if(s1 == STATUS_UNDEFINED || s2 == STATUS_UNDEFINED){
+		return new EmuInt(STATUS_UNDEFINED);
+	}
+	if(s1 == STATUS_UNINITIALIZED || s2 == STATUS_UNINITIALIZED){
+		return new EmuInt(STATUS_UNINITIALIZED);
+	}
+	return new EmuInt(val-other->val);
+}
+
+// assumes STATUS_DEFINED
+const EmuVal* EmuInt::cast_to(QualType t) const{
+	QualType canon = t.getCanonicalType();
+	if(canon == IntType){
+		return new EmuInt(val);
+	} else if(canon == ULongType){
+		if(val < 0){
+			return new EmuULong(STATUS_UNDEFINED);
+		} else {
+			return new EmuULong((uint32_t)val);
+		}
+	} else {
+		cant_cast();
+	}
+}
+
+EmuULong::EmuULong(status_t s)
+	:EmuVal(s,ULongType),repr_type_id(EMU_TYPE_ULONG_ID)
+{
+}
+
+EmuULong::EmuULong(uint32_t i)
+	:EmuVal(STATUS_DEFINED,ULongType),val(i),repr_type_id(EMU_TYPE_ULONG_ID)
+{
+}
+
+EmuULong::EmuULong(const void* p)
+	: EmuVal(STATUS_UNDEFINED, ULongType)
+{
 	const emu_type_id_t* type_ptr = (const emu_type_id_t*)p;
-	const int32_t* val_ptr = (const int32_t*)(type_ptr+1);
+	const uint32_t* val_ptr = (const uint32_t*)(type_ptr+1);
 	emu_type_id_t t = *type_ptr;
-	int32_t v = *val_ptr;
+	uint32_t v = *val_ptr;
 	repr_type_id=t;
 	val = v;
 	switch(t){
-	case EMU_TYPE_INT_ID:
+	case EMU_TYPE_ULONG_ID:
 		break;
 	case EMU_TYPE_ZERO_ID:
 		if(v==0) break;
@@ -89,17 +166,89 @@ void EmuInt::set_to_repr(const void* p) {
 	status = STATUS_DEFINED;
 }
 
+EmuULong::~EmuULong(void)
+{
+}
 
-EmuPtr::EmuPtr(status_t s)
-	: EmuVal(s,RawPtrType),offset(0)
+size_t EmuULong::size(void) const{
+	// 4 for type tag, 4 for value
+	return sizeof(repr_type_id)+sizeof(val);
+}
+
+void EmuULong::print_impl(void) const{
+	llvm::outs() << val;
+}
+
+void EmuULong::dump_repr(void* p) const{
+	emu_type_id_t* type_ptr = (emu_type_id_t*)p;
+	uint32_t* val_ptr = (uint32_t*)(type_ptr+1);
+	switch(status){
+	case STATUS_DEFINED:
+	case STATUS_UNDEFINED:
+		*type_ptr = repr_type_id;
+		*val_ptr = val;
+		break;
+	case STATUS_UNINITIALIZED:
+		*type_ptr = EMU_TYPE_INVALID_ID;
+		*val_ptr = EMU_TYPE_INVALID_ID;
+		break;
+	}
+}
+
+// assumes STATUS_DEFINED
+const EmuVal* EmuULong::cast_to(QualType t) const{
+	if(t.getCanonicalType() == ULongType){
+		return new EmuULong(val);
+	}
+	cant_cast();
+}
+
+const EmuULong* EmuULong::multiply(const EmuULong* other) const{
+	status_t s1 = status;
+	status_t s2 = other->status;
+	if(s1 == STATUS_UNDEFINED || s2 == STATUS_UNDEFINED){
+		return new EmuULong(STATUS_UNDEFINED);
+	}
+	if(s1 == STATUS_UNINITIALIZED || s2 == STATUS_UNINITIALIZED){
+		return new EmuULong(STATUS_UNINITIALIZED);
+	}
+	return new EmuULong(val*other->val);
+}
+
+EmuPtr::EmuPtr(status_t s, QualType t)
+	: EmuVal(s,t),offset(0)
 {
 	u.block = nullptr;
 }
 
-EmuPtr::EmuPtr(mem_ptr ptr)
-	: EmuVal(STATUS_DEFINED,RawPtrType),offset(ptr.offset)
+EmuPtr::EmuPtr(mem_ptr ptr, QualType t)
+	: EmuVal(STATUS_DEFINED, t),offset(ptr.offset)
 {
 	u.block = ptr.block;
+}
+
+EmuPtr::EmuPtr(const void* p, QualType qt)
+	: EmuVal(STATUS_UNDEFINED, qt)
+{
+	const emu_type_id_t* type_ptr = (const emu_type_id_t*) p;
+	const block_id_t* bid_ptr = (const block_id_t*)(type_ptr+1);
+	const size_t* offset_ptr = (const size_t*)(bid_ptr+1);
+
+	emu_type_id_t t = *type_ptr;
+	block_id_t id = *bid_ptr;
+	offset = *offset_ptr;
+	if(t == EMU_TYPE_PTR_ID){
+		auto it = active_mem.find(id);
+		if(it != active_mem.end()){
+			status = STATUS_DEFINED;
+			mem_block* block = it->second;
+			u.block = block;
+			return;
+		}
+	}
+	status = STATUS_UNDEFINED;
+	u.repr.type_id = t;
+	u.repr.block_id = id;
 }
 
 EmuPtr::~EmuPtr(void) {}
@@ -141,27 +290,14 @@ void EmuPtr::dump_repr(void* p) const{
 	}
 }
 
-void EmuPtr::set_to_repr(const void* p){
-	const emu_type_id_t* type_ptr = (const emu_type_id_t*) p;
-	const block_id_t* bid_ptr = (const block_id_t*)(type_ptr+1);
-	const size_t* offset_ptr = (const size_t*)(bid_ptr+1);
-
-	emu_type_id_t t = *type_ptr;
-	block_id_t id = *bid_ptr;
-	offset = *offset_ptr;
-	if(t == EMU_TYPE_PTR_ID){
-		auto it = active_mem.find(id);
-		if(it != active_mem.end()){
-			status = STATUS_DEFINED;
-			mem_block* block = it->second;
-			u.block = block;
-			return;
-		}
+// assumes STATUS_DEFINED
+const EmuVal* EmuPtr::cast_to(QualType t) const{
+	if(t.getTypePtr()->isPointerType()){
+		return new EmuPtr(mem_ptr(u.block, offset), t);
 	}
-	status = STATUS_UNDEFINED;
-	u.repr.type_id = t;
-	u.repr.block_id = id;
+	cant_cast();
 }
+
 /*
 EmuArr::EmuArr(status_t s, unsigned int n)
 	: EmuPtr(s), num(n)
@@ -183,6 +319,24 @@ EmuFunc::EmuFunc(uint32_t f, QualType t)
 {
 }
 
+EmuFunc::EmuFunc(const void* p, QualType qt)
+	:EmuVal(STATUS_UNDEFINED,qt)
+{
+	const emu_type_id_t* type_ptr = (const emu_type_id_t*)p;
+	const uint32_t* id_ptr = (const uint32_t*)(type_ptr+1);
+	emu_type_id_t t = *type_ptr;
+	repr_type_id = t;
+	uint32_t id = *id_ptr;
+	func_id = id;
+	bool def = (t == EMU_TYPE_FUNC_ID && global_functions.find(id) != global_functions.end());
+	status = def?STATUS_DEFINED:STATUS_UNDEFINED;
+}
+
+EmuFunc::EmuFunc(const void* p)
+	:EmuFunc(p, RawType)
+{
+}
+
 EmuFunc::~EmuFunc(void){}
 
 size_t EmuFunc::size(void) const{
@@ -200,20 +354,21 @@ void EmuFunc::dump_repr(void* p) const {
 	*id_ptr = func_id;
 }
 
-void EmuFunc::set_to_repr(const void* p) {
-	const emu_type_id_t* type_ptr = (const emu_type_id_t*)p;
-	const uint32_t* id_ptr = (const uint32_t*)(type_ptr+1);
-	emu_type_id_t t = *type_ptr;
-	repr_type_id = t;
-	uint32_t id = *id_ptr;
-	func_id = id;
-	bool def = (t == EMU_TYPE_FUNC_ID && global_functions.find(id) != global_functions.end());
-	status = def?STATUS_DEFINED:STATUS_UNDEFINED;
+// assumes STATUS_DEFINED
+const EmuVal* EmuFunc::cast_to(QualType t) const{
+	if(t.getTypePtr()->isFunctionType()){
+		return new EmuFunc(func_id, t);
+	}
+	cant_cast();
 }
-/*
-EmuVoid::EmuVoid(void) {}
 
-size_t EmuVoid::size(void){
+
+EmuVoid::EmuVoid(void)
+	: EmuVal(STATUS_DEFINED, VoidType)
+{
+}
+
+size_t EmuVoid::size(void) const{
 	err_exit("Tried to get size of void");
 }
 
@@ -221,12 +376,14 @@ void EmuVoid::print_impl(void) const{
 	llvm::outs() << "<void>";
 }
 
-void EmuVoid::dump_repr(void*){}
-
-void EmuVoid::set_to_repr(const void*){
-	err_exit("Tried to load value of void\n");
+void EmuVoid::dump_repr(void*) const{
+	err_exit("Tried to write void to memory");
 }
-*/
+
+const EmuVal* EmuVoid::cast_to(QualType) const{
+	err_exit("Tried to cast void");
+}
+
 EmuBool::EmuBool(status_t s)
 	: EmuVal(s,BoolType), repr_type_id(EMU_TYPE_BOOL_ID), value(2)
 {
@@ -235,6 +392,19 @@ EmuBool::EmuBool(status_t s)
 EmuBool::EmuBool(bool b)
 	: EmuVal(STATUS_DEFINED,BoolType), repr_type_id(EMU_TYPE_BOOL_ID), value(b?1:0)
 {
+}
+
+EmuBool::EmuBool(const void* p)
+	: EmuVal(STATUS_UNDEFINED,BoolType)
+{
+	const emu_type_id_t* type_ptr = (const emu_type_id_t*)p;
+	const char* value_ptr = (const char*)(type_ptr+1);
+	emu_type_id_t t = *type_ptr;
+	char v = *value_ptr;
+	bool def = (v == 0 || v == 1) && t == EMU_TYPE_BOOL_ID;
+	repr_type_id = t;
+	value = v;
+	status = def?STATUS_DEFINED:STATUS_UNDEFINED;
 }
 
 EmuBool::~EmuBool(void){}
@@ -254,13 +424,10 @@ void EmuBool::dump_repr(void* p) const{
 	*value_ptr = value;
 }
 
-void EmuBool::set_to_repr(const void* p){
-	const emu_type_id_t* type_ptr = (const emu_type_id_t*)p;
-	const char* value_ptr = (const char*)(type_ptr+1);
-	emu_type_id_t t = *type_ptr;
-	char v = *value_ptr;
-	bool def = (v == 0 || v == 1) && t == EMU_TYPE_BOOL_ID;
-	repr_type_id = t;
-	value = v;
-	status = def?STATUS_DEFINED:STATUS_UNDEFINED;
+// assumes STATUS_DEFINED
+const EmuVal* EmuBool::cast_to(QualType t) const{
+	if(t.getCanonicalType() == BoolType){
+		return new EmuBool(value?1:0);
+	}
+	cant_cast();
 }
