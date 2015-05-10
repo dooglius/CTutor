@@ -1,5 +1,5 @@
 #include <stdlib.h>
-#include "llvm/Support/raw_ostream.h"
+#include "debug.h"
 #include "exit.h"
 
 void exit_premature(void){
@@ -7,22 +7,27 @@ void exit_premature(void){
 }
 
 void cant_handle(void){
-	llvm::outs() << "!The interpreter doesn't know how to handle this\n";
+	debug_dump("The interpreter doesn't know how to handle this");
 	exit_premature();
 }
 
 void bad_memwrite(void){
-	llvm::outs() << "!Attempted write to unallocated memory\n";
+	debug_dump("Attempted write to unallocated memory");
+	exit_premature();
+}
+
+void bad_memread(void){
+	debug_dump("Attempted read larger than memory allocation");
 	exit_premature();
 }
 
 void err_exit(const char* s){
-	llvm::outs() << "!The following error was reported: "<<s<<"\n";
+	debug_dump(s);
 	exit_premature();
 }
 
 void cant_cast(void){
-	llvm::outs() << "!The interpreter doesn't know how to perform this cast\n";
+	debug_dump("The interpreter doesn't know how to perform this cast");
 	exit_premature();
 }
 
@@ -31,6 +36,6 @@ void exit_clean(void){
 }
 
 void err_undef(void){
-	llvm::outs() << "!Tried to use an undefined or uninitialized value\n";
+	debug_dump("Tried to use an undefined or uninitialized value");
 	exit_premature();
 }

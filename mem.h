@@ -24,7 +24,7 @@ uint32_t new_fid(void);
 #define BLOCK_ID_INVALID 2
 #define BLOCK_ID_START 3
 
-#define FUNC_ID_START 1
+#define NUM_EXTERNAL_FUNCTIONS 3
 
 // represents a list of objects of the same type and size
 class mem_tag{
@@ -49,6 +49,7 @@ public:
 
 	size_t sortval(void) const;
 	void write(const EmuVal*, size_t);
+	void free(void);
 
 	const block_id_t id;
 	const size_t size; // extra space is uninit
@@ -80,8 +81,12 @@ public:
 };
 
 extern std::unordered_map<block_id_t, mem_block*> active_mem;
-extern std::deque<std::unordered_map<std::string, lvalue> > stack_vars;
-extern std::unordered_map<std::string, lvalue> global_vars;
-extern std::unordered_map<uint32_t, const void*> global_functions;
-extern std::unordered_map<uint32_t, std::string> external_functions;
-extern std::unordered_map<uint32_t, std::string> simulated_functions;
+extern std::unordered_map<std::string, std::deque<std::pair<int,int> > > stack_var_map;
+extern std::vector<std::vector<std::pair<std::string, lvalue> > > stack_vars;
+extern std::unordered_map<std::string, lvalue>* local_vars;
+extern std::unordered_map<std::string, int> global_vars;
+extern std::unordered_map<uint32_t, std::pair<int, const void*> > global_functions;
+
+void add_stack_var(std::string, lvalue);
+void add_stack_frame(void);
+void pop_stack_frame(void);

@@ -15,7 +15,7 @@ static block_id_t new_block_id(void){
 	return ans;
 }
 
-static uint32_t fid_counter = FUNC_ID_START;
+static uint32_t fid_counter = NUM_EXTERNAL_FUNCTIONS;
 uint32_t new_fid(void){
 	uint32_t ans = fid_counter;
 	if(ans == 0){ // overflow
@@ -26,12 +26,50 @@ uint32_t new_fid(void){
 }
 
 std::unordered_map<block_id_t, mem_block*> active_mem;
-std::deque<std::unordered_map<std::string, lvalue> > stack_vars;
-std::unordered_map<std::string, lvalue> global_vars;
-std::unordered_map<uint32_t, const void*> global_functions;
-std::unordered_map<uint32_t, std::string> external_functions;
-std::unordered_map<uint32_t, std::string> simulated_functions;
+std::unordered_map<std::string, std::deque<std::pair<int,int> > > stack_var_map;
+std::vector<std::vector<std::pair<std::string, lvalue> > > stack_vars;
+std::unordered_map<std::string, lvalue>* local_vars;
+std::unordered_map<std::string, int> global_vars;
+std::unordered_map<uint32_t, std::pair<int, const void*> > global_functions;
 
+void add_stack_var(std::string name, lvalue loc){
+	int n = stack_vars.size()-1;
+	int i = stack_vars[n].size();
+	llvm::errs() << "DOUG MEM DEBUG: adding "<<name<<" at stack location "<<n<<","<<i<<" with block at "<<((void*)loc.ptr.block)<<"\n";
+	stack_vars.back().push_back(std::pair<std::string, lvalue> (name, loc));
+	auto list = stack_var_map.find(name);
+	if(list == stack_var_map.end()){
+		std::deque<std::pair<int, int> > newq = std::deque<std::pair<int, int> >();
+		newq.push_back(std::pair<int, int>(n, i));
+		stack_var_map.insert(std::make_pair(name, newq));
+	} else {
+		list->second.push_back(std::pair<int, int>(n,i));
+	}
+}
+
+void add_stack_frame(void){
+	stack_vars.push_back(std::vector<std::pair<std::string, lvalue>>());
+	llvm::errs() << "DOUG MEM DEBUG: adding stack frame, there are now "<<stack_vars.size()<<"\n";
+}
+
+void pop_stack_frame(void){
+	auto frame = stack_vars.back();
+	stack_vars.pop_back();
+	for(auto it = frame.cbegin(); it != frame.cend(); it++){
+		std::string name = it->first;
+		auto list = &stack_var_map.find(name)->second;
+//		llvm::errs() << "DOUG MEM DEBUG: while popping stack frame, deleting local var "<<name<<" from list of "<<list->size()<<" with that name\n";
+//		llvm::errs() << "DOUG MEM DEBUG: most recent list element has loc "<<list->back().first<<","<<list->back().second<<"\n";
+//		llvm::errs() << "DOUG MEM DEBUG: oldest list element has loc "<<list->front().first<<","<<list->front().second<<"\n";
+		bool erase = (list->size() == 1);
+		list->pop_back();
+		if(erase){
+			stack_var_map.erase(name);
+		}
+		it->second.ptr.block->free();
+	}
+	llvm::errs() << "DOUG MEM DEBUG: popping stack frame, there are now "<<stack_vars.size()<<"\n";
+}
 
 // only next isn't set immediately
 mem_tag::mem_tag(size_t o, size_t s, rbnode<mem_tag>* p, QualType t)
@@ -208,6 +246,11 @@ void mem_block::write(const EmuVal* obj, size_t offset){
 	update_tag_write(obj, offset);
 }
 
+void mem_block::free(void){
+	memtype = MEM_TYPE_FREED;
+	delete ((char*)data);
+}
+
 mem_block::mem_block(mem_type_t t, size_t s)
 	:id(new_block_id()),size(s),memtype(t),data(new char[s]),firsttag(nullptr),tags()
 {
@@ -222,6 +265,7 @@ mem_block::mem_block(mem_type_t t, const EmuVal* obj)
 
 mem_block::~mem_block(void){
 	delete[] ((char*)data);
+	active_mem.erase(id);
 }
 
 mem_ptr::mem_ptr(mem_block* b, size_t o)
